@@ -4,10 +4,11 @@ import asyncio
 from aiogram import Bot, Dispatcher, types, executor
 from pyrogram import Client
 
+# 🔐 YOUR CREDENTIALS
 BOT_TOKEN = "8149868870:AAEHI6JPA6DqTUfO9WvxssvEQzbx4mXQPJg"
 API_ID = "20711021"
 API_HASH = "84459a13351f6a102e087fdfc3547e31"
-PHONE_NUMBER = "+917803946534"
+PHONE_NUMBER = "8149868870:AAEHI6JPA6DqTUfO9WvxssvEQzbx4mXQPJg"
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(bot)
@@ -16,7 +17,6 @@ user_client = Client("my_account", api_id=API_ID, api_hash=API_HASH, phone_numbe
 scrape_queue = asyncio.Queue()
 default_limit = 100000
 
-# 🧠 Extract identifier from input
 def extract_channel_identifier(raw_input: str):
     raw_input = raw_input.strip()
     if raw_input.startswith("https://t.me/+"):
@@ -28,12 +28,10 @@ def extract_channel_identifier(raw_input: str):
     else:
         return raw_input
 
-# 🧹 Remove duplicate CCs
 def remove_duplicates(messages):
     unique = list(set(messages))
     return unique, len(messages) - len(unique)
 
-# 🔍 Scrape messages from channel
 async def scrape_messages(user_client, channel_username, limit, start_number=None):
     messages, count = [], 0
     pattern = r'\d{16}\D*\d{2}\D*\d{2,4}\D*\d{3,4}'
@@ -53,7 +51,6 @@ async def scrape_messages(user_client, channel_username, limit, start_number=Non
         messages = [m for m in messages if m.startswith(start_number)]
     return messages[:limit]
 
-# 🔄 Process queue
 async def process_scrape_queue(user_client, bot):
     while True:
         task = await scrape_queue.get()
@@ -68,10 +65,7 @@ async def process_scrape_queue(user_client, bot):
         user = message.from_user
         first_name = user.first_name
         username = user.username
-        if username:
-            scrapper = f"<a href='https://t.me/{username}'>{first_name}</a>"
-        else:
-            scrapper = first_name
+        scrapper = f"<a href='https://t.me/{username}'>{first_name}</a>" if username else first_name
 
         results = await scrape_messages(user_client, channel_username, limit, start_number)
         if results:
@@ -102,8 +96,6 @@ async def process_scrape_queue(user_client, bot):
 
         scrape_queue.task_done()
 
-# 🧠 Commands
-
 @dp.message_handler(commands=['start'])
 async def start_cmd(message: types.Message):
     reply_id = message.reply_to_message.message_id if message.reply_to_message else message.message_id
@@ -112,18 +104,7 @@ async def start_cmd(message: types.Message):
         "📌 Usage:\n"
         "<code>/scr channel amount</code>\n"
         "<code>/scr channel amount bin</code>\n\n"
-        "💬 You can also reply to someone's message with /scr!"
-    )
-    await bot.send_message(message.chat.id, msg, parse_mode='html', reply_to_message_id=reply_id)
-
-@dp.message_handler(commands=['cmds'])
-async def cmds_cmd(message: types.Message):
-    reply_id = message.reply_to_message.message_id if message.reply_to_message else message.message_id
-    msg = (
-        "<b>📋 Available Commands:</b>\n"
-        "<code>/scr username amount</code>\n"
-        "<code>/scr username amount bin</code>\n\n"
-        "⚠ Max limit: 100000"
+        "💬 Reply to someone to send result directly to their message."
     )
     await bot.send_message(message.chat.id, msg, parse_mode='html', reply_to_message_id=reply_id)
 
@@ -147,32 +128,42 @@ async def scr_cmd(message: types.Message):
     channel_identifier = extract_channel_identifier(raw_input)
 
     try:
-        if raw_input.startswith("https://t.me/+"):
-            try:
-                chat = await user_client.join_chat(channel_identifier)
-                channel_username = chat.id
-            except Exception as e:
-                if "USER_ALREADY_PARTICIPANT" in str(e):
-                    chat = await user_client.get_chat(channel_identifier)
-                    channel_username = chat.id
-                else:
-                    await bot.send_message(message.chat.id, "❌ Could not join private channel", reply_to_message_id=reply_to_msg_id)
-                    return
-        else:
-            try:
-                await user_client.join_chat(channel_identifier)
-            except:
-                pass
-            chat = await user_client.get_chat(channel_identifier)
-            channel_username = chat.id
-    except:
-        await bot.send_message(message.chat.id, "❌ Channel not found or inaccessible", reply_to_message_id=reply_to_msg_id)
+        # Try to join the channel first
+        try:
+            await user_client.join_chat(channel_identifier)
+        except Exception as e:
+            if "INVITE_REQUEST_SENT" in str(e):
+                await bot.send_message(
+                    message.chat.id,
+                    "⚠️ Request to join sent. Please wait for admin approval before scraping.",
+                    parse_mode='html',
+                    reply_to_message_id=reply_to_msg_id
+                )
+                return
+            elif "USER_ALREADY_PARTICIPANT" not in str(e):
+                await bot.send_message(
+                    message.chat.id,
+                    f"❌ Could not join the channel.\n<code>{str(e)}</code>",
+                    parse_mode='html',
+                    reply_to_message_id=reply_to_msg_id
+                )
+                return
+
+        # Get chat info to confirm access
+        chat = await user_client.get_chat(channel_identifier)
+        channel_username = chat.id
+    except Exception as e:
+        await bot.send_message(
+            message.chat.id,
+            f"❌ Channel not found or inaccessible.\n<code>{str(e)}</code>",
+            parse_mode='html',
+            reply_to_message_id=reply_to_msg_id
+        )
         return
 
     temp_msg = await bot.send_message(message.chat.id, "⏳ Scraping in progress...", parse_mode='html', reply_to_message_id=reply_to_msg_id)
     await scrape_queue.put((message, channel_username, limit, start_number, temp_msg, reply_to_msg_id))
 
-# 🚀 Startup
 async def on_startup(dp):
     await user_client.start()
     asyncio.create_task(process_scrape_queue(user_client, bot))
